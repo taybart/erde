@@ -75,7 +75,7 @@ describe('erde.rewrite', function()
     )
   end)
 
-  spec('#5.4', function()
+  spec('#5.4 #5.5', function()
     assert_rewrite(
       [[print('a' + 1)]],
       [[[string "print..."]:1: attempt to add a 'string' with a 'number']]
@@ -244,7 +244,7 @@ spec('erde.load Lua target #5.1+', make_load_spec(function()
   assert.are.equal('5.1', config.lua_target)
 
   assert.has.errors(function()
-    erde.load('5.5') -- invalid target
+    erde.load('5.6') -- invalid target
   end)
 end))
 

@@ -23,6 +23,8 @@ _MODULE.VALID_LUA_TARGETS = {
 	"5.3+",
 	"5.4",
 	"5.4+",
+	"5.5",
+	"5.5+",
 }
 for i, target in ipairs(_MODULE.VALID_LUA_TARGETS) do
 	_MODULE.VALID_LUA_TARGETS[target] = true

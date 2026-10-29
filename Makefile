@@ -7,15 +7,17 @@ LUA_TARGET_TAGS_5.3+ := "5.3%+,$(LUA_TARGET_TAGS_5.2+)"
 LUA_TARGET_TAGS_5.3 := "5.3,$(LUA_TARGET_TAGS_5.3+)"
 LUA_TARGET_TAGS_5.4+ := "5.4%+,$(LUA_TARGET_TAGS_5.3+)"
 LUA_TARGET_TAGS_5.4 := "5.4,$(LUA_TARGET_TAGS_5.4+)"
+LUA_TARGET_TAGS_5.5+ := "5.5%+,$(LUA_TARGET_TAGS_5.4+)"
+LUA_TARGET_TAGS_5.5 := "5.5,$(LUA_TARGET_TAGS_5.5+)"
 
-.PHONY: default build test release
+.PHONY: default build test test-5.5 release
 
 define runtest
 	$(eval LUA_EXECUTABLE = $(1))
 	$(eval LUA_TARGET = $(2))
 	$(eval LUA_TARGET_TAGS = $(LUA_TARGET_TAGS_$(shell echo $(LUA_TARGET) | tr a-z A-Z)))
   @echo "targeting $(LUA_TARGET) on $(LUA_EXECUTABLE)"
-  @LUA_TARGET="$(LUA_TARGET)" busted --lua="/usr/bin/$(LUA_EXECUTABLE)" --tags="$(LUA_TARGET_TAGS)"
+  @LUA_TARGET="$(LUA_TARGET)" busted --lua="$(shell command -v $(LUA_EXECUTABLE))" --tags="$(LUA_TARGET_TAGS)"
   @echo
 endef
 
@@ -43,6 +45,21 @@ test:
 	$(call runtest,lua5.4,5.2+)
 	$(call runtest,lua5.4,5.3+)
 	$(call runtest,lua5.4,5.4+)
+	$(call runtest,lua5.5,5.5)
+	$(call runtest,lua5.5,5.1+)
+	$(call runtest,lua5.5,5.2+)
+	$(call runtest,lua5.5,5.3+)
+	$(call runtest,lua5.5,5.4+)
+	$(call runtest,lua5.5,5.5+)
+
+test-5.5:
+	@echo
+	$(call runtest,lua5.5,5.5)
+	$(call runtest,lua5.5,5.1+)
+	$(call runtest,lua5.5,5.2+)
+	$(call runtest,lua5.5,5.3+)
+	$(call runtest,lua5.5,5.4+)
+	$(call runtest,lua5.5,5.5+)
 
 release:
 	@echo '- update version:'

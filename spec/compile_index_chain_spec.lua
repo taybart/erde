@@ -91,7 +91,7 @@ describe('method call source map', function()
     ]])
   end)
 
-  spec('#5.1 jit #5.4', function()
+  spec('#5.1 jit #5.4 #5.5', function()
     assert_source_map(3, [[
       local a = {}
       a

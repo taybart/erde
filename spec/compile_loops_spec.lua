@@ -186,6 +186,48 @@ spec('for loop update block declarations #5.1+', function()
   ]])
 end)
 
+spec('for loop reassign loop variables #5.1+', function()
+  assert_run({ 2, 3, 4 }, [[
+    local a = {}
+    for i = 1, 3 { i += 1; table.insert(a, i) }
+    return a
+  ]])
+
+  assert_run({ 2, 4 }, [[
+    local a = {}
+    for i, value in ipairs({ 1, 2 }) { value *= 2; table.insert(a, value) }
+    return a
+  ]])
+
+  assert_run(3, [[
+    local a = 0
+    for end = 1, 1 { end = 3; a = end }
+    return a
+  ]])
+
+  assert_run({ 2, 3 }, [[
+    local a = {}
+    for i = 1, 2 {
+      local increment = () -> { i += 1 }
+      increment()
+      table.insert(a, i)
+    }
+    return a
+  ]])
+
+  assert_run('function', [[
+    local a
+    for i = 1, 1 { function i() {}; a = type(i) }
+    return a
+  ]])
+
+  assert_run({ 0, 0 }, [[
+    local a = {}
+    for i = 1, 2 { local i = i; i = 0; table.insert(a, i) }
+    return a
+  ]])
+end)
+
 -- -----------------------------------------------------------------------------
 -- Repeat Until
 -- -----------------------------------------------------------------------------

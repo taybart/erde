@@ -5,6 +5,15 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 Versioning based on [Semantic Versioning](https://semver.org/), with suffix
 based on [rockspec versioning](https://github.com/luarocks/luarocks/wiki/Rockspec-format).
 
+## [UNRELEASED]
+
+### Added
+- Lua 5.5 support (`5.5` and `5.5+` targets)
+
+### Fixed
+- Reassigning loop variables no longer generates invalid Lua for Lua 5.5, where loop variables are read-only
+    - ex) `for i = 1, 3 { i += 1 }`
+
 ## [1.0.0-1] - August 11, 2023
 
 ### Changed

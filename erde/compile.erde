@@ -112,6 +112,15 @@ local function add_block_declaration(var, scope, stack_depth = block_depth) {
   }
 }
 
+-- Marks a name as reassigned if it refers to a loop variable (see `for_loop`).
+local function mark_reassignment(name) {
+  local scope = block_declarations[name]
+
+  if type(scope) == 'table' {
+    scope.is_reassigned = true
+  }
+}
+
 -- -----------------------------------------------------------------------------
 -- Parse Helpers
 -- -----------------------------------------------------------------------------
@@ -223,8 +232,10 @@ local function compile_binop(op_token, op_line, lhs, rhs) {
     op_token == '//' &&
     lua_target != '5.3' &&
     lua_target != '5.4' &&
+    lua_target != '5.5' &&
     lua_target != '5.3+' &&
-    lua_target != '5.4+'
+    lua_target != '5.4+' &&
+    lua_target != '5.5+'
   )
 
   if needs_floor_division_polyfill {
@@ -915,6 +926,8 @@ local function function_signature(scope) {
 
   if scope == 'module' || scope == 'global' {
     block_declarations[base_name] = scope
+  } elseif scope == nil && current_token.value != '.' && current_token.value != ':' {
+    mark_reassignment(base_name)
   }
 
   local signature = get_compile_name(base_name, scope || block_declarations[base_name])
@@ -1245,16 +1258,26 @@ local function for_loop() {
   local compile_lines = {}
   local pre_body_compile_lines = {}
 
+  -- Lua 5.5 makes loop variables read-only, so we declare them w/ a table scope
+  -- (instead of 'local') in order to track whether they are reassigned in the
+  -- loop body. Reassigned loop variables are rebound to a regular local at the
+  -- start of the loop body.
+  local loop_vars = {}
+
+  local function declare_loop_var(var_name) {
+    local loop_var = { compile_lines = { get_compile_name(var_name) }, is_reassigned = false }
+    add_block_declaration(var_name, loop_var, block_depth + 1)
+    table.insert(loop_vars, loop_var)
+    return loop_var.compile_lines
+  }
+
   table.insert(compile_lines, consume()) -- 'for'
 
   local next_token = tokens[current_token_index + 1]
 
   if next_token.type == TOKEN_TYPES.SYMBOL && next_token.value == '=' {
-    local loop_name = name()
-
-    add_block_declaration(loop_name, 'local', block_depth + 1)
-
-    table.insert(compile_lines, get_compile_name(loop_name) .. consume())
+    table.insert(compile_lines, declare_loop_var(name()))
+    table.insert(compile_lines, consume()) -- '='
 
     local expressions_line = current_token.line
     local expressions = list(expression)
@@ -1269,11 +1292,10 @@ local function for_loop() {
     local names = {}
 
     for _, var in ipairs(list(variable)) {
-      add_block_declaration(var, 'local', block_depth + 1)
-
       if type(var) == 'string' {
-        table.insert(names, get_compile_name(var))
+        table.insert(names, declare_loop_var(var))
       } else {
+        add_block_declaration(var, 'local', block_depth + 1)
         table.insert(names, var.compile_name)
         table.insert(pre_body_compile_lines, 'local ' .. table.concat(table.map(var.declaration_names, get_compile_name), ','))
         table.insert(pre_body_compile_lines, var.compile_lines)
@@ -1285,9 +1307,20 @@ local function for_loop() {
     table.insert(compile_lines, weave(list(expression)))
   }
 
+  local body_compile_lines = surround('{', '}', loop_block)
+
+  for _, loop_var in ipairs(loop_vars) {
+    if loop_var.is_reassigned {
+      local compile_name = loop_var.compile_lines[1]
+      local tmp_name = new_tmp_name()
+      loop_var.compile_lines[1] = tmp_name
+      table.insert(pre_body_compile_lines, "local { compile_name } = { tmp_name }")
+    }
+  }
+
   table.insert(compile_lines, 'do')
   table.insert(compile_lines, pre_body_compile_lines)
-  table.insert(compile_lines, surround('{', '}', loop_block))
+  table.insert(compile_lines, body_compile_lines)
   table.insert(compile_lines, 'end')
 
   return compile_lines
@@ -1385,10 +1418,16 @@ local function assignment_index_chain() {
   } else {
     local base_name_line, base_name = current_token.line, name()
 
-    return index_chain({
+    local chain = index_chain({
       base_compile_lines = { base_name_line, get_compile_name(base_name, block_declarations[base_name]) },
       has_trivial_base = true,
     })
+
+    if chain.chain_len == 0 {
+      mark_reassignment(base_name)
+    }
+
+    return chain
   }
 }
 

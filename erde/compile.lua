@@ -67,6 +67,12 @@ local function add_block_declaration(var, scope, stack_depth)
 		end
 	end
 end
+local function mark_reassignment(name)
+	local scope = block_declarations[name]
+	if type(scope) == "table" then
+		scope.is_reassigned = true
+	end
+end
 local function consume()
 	local consumed_token_value = current_token.value
 	current_token_index = current_token_index + 1
@@ -157,8 +163,10 @@ local function compile_binop(op_token, op_line, lhs, rhs)
 		op_token == "//"
 		and lua_target ~= "5.3"
 		and lua_target ~= "5.4"
+		and lua_target ~= "5.5"
 		and lua_target ~= "5.3+"
 		and lua_target ~= "5.4+"
+		and lua_target ~= "5.5+"
 	)
 	if needs_floor_division_polyfill then
 		return {
@@ -736,6 +744,8 @@ local function function_signature(scope)
 	end
 	if scope == "module" or scope == "global" then
 		block_declarations[base_name] = scope
+	elseif scope == nil and current_token.value ~= "." and current_token.value ~= ":" then
+		mark_reassignment(base_name)
 	end
 	local signature = get_compile_name(base_name, scope or block_declarations[base_name])
 	local needs_label_assignment = false
@@ -771,10 +781,10 @@ local function function_declaration(scope)
 	}
 	consume()
 	local signature, needs_label_assignment, needs_self_injection
-	local __ERDE_TMP_979__ = function_signature(scope)
-	signature = __ERDE_TMP_979__.signature
-	needs_label_assignment = __ERDE_TMP_979__.needs_label_assignment
-	needs_self_injection = __ERDE_TMP_979__.needs_self_injection
+	local __ERDE_TMP_996__ = function_signature(scope)
+	signature = __ERDE_TMP_996__.signature
+	needs_label_assignment = __ERDE_TMP_996__.needs_label_assignment
+	needs_self_injection = __ERDE_TMP_996__.needs_self_injection
 	if scope == "local" then
 		table.insert(compile_lines, "local")
 	end
@@ -1008,12 +1018,23 @@ end
 local function for_loop()
 	local compile_lines = {}
 	local pre_body_compile_lines = {}
+	local loop_vars = {}
+	local function declare_loop_var(var_name)
+		local loop_var = {
+			compile_lines = {
+				get_compile_name(var_name),
+			},
+			is_reassigned = false,
+		}
+		add_block_declaration(var_name, loop_var, block_depth + 1)
+		table.insert(loop_vars, loop_var)
+		return loop_var.compile_lines
+	end
 	table.insert(compile_lines, consume())
 	local next_token = tokens[current_token_index + 1]
 	if next_token.type == TOKEN_TYPES.SYMBOL and next_token.value == "=" then
-		local loop_name = name()
-		add_block_declaration(loop_name, "local", block_depth + 1)
-		table.insert(compile_lines, get_compile_name(loop_name) .. consume())
+		table.insert(compile_lines, declare_loop_var(name()))
+		table.insert(compile_lines, consume())
 		local expressions_line = current_token.line
 		local expressions = list(expression)
 		local num_expressions = #expressions
@@ -1024,10 +1045,10 @@ local function for_loop()
 	else
 		local names = {}
 		for _, var in ipairs(list(variable)) do
-			add_block_declaration(var, "local", block_depth + 1)
 			if type(var) == "string" then
-				table.insert(names, get_compile_name(var))
+				table.insert(names, declare_loop_var(var))
 			else
+				add_block_declaration(var, "local", block_depth + 1)
 				table.insert(names, var.compile_name)
 				table.insert(
 					pre_body_compile_lines,
@@ -1040,9 +1061,18 @@ local function for_loop()
 		table.insert(compile_lines, expect("in", true))
 		table.insert(compile_lines, weave(list(expression)))
 	end
+	local body_compile_lines = surround("{", "}", loop_block)
+	for _, loop_var in ipairs(loop_vars) do
+		if loop_var.is_reassigned then
+			local compile_name = loop_var.compile_lines[1]
+			local tmp_name = new_tmp_name()
+			loop_var.compile_lines[1] = tmp_name
+			table.insert(pre_body_compile_lines, "local " .. tostring(compile_name) .. " = " .. tostring(tmp_name))
+		end
+	end
 	table.insert(compile_lines, "do")
 	table.insert(compile_lines, pre_body_compile_lines)
-	table.insert(compile_lines, surround("{", "}", loop_block))
+	table.insert(compile_lines, body_compile_lines)
 	table.insert(compile_lines, "end")
 	return compile_lines
 end
@@ -1119,13 +1149,17 @@ local function assignment_index_chain()
 		})
 	else
 		local base_name_line, base_name = current_token.line, name()
-		return index_chain({
+		local chain = index_chain({
 			base_compile_lines = {
 				base_name_line,
 				get_compile_name(base_name, block_declarations[base_name]),
 			},
 			has_trivial_base = true,
 		})
+		if chain.chain_len == 0 then
+			mark_reassignment(base_name)
+		end
+		return chain
 	end
 end
 local function non_operator_assignment(ids, expressions)
@@ -1391,10 +1425,10 @@ return function(source, options)
 		source_map = source_map,
 		source_line = current_token.line,
 	})
-	for _, __ERDE_TMP_1936__ in ipairs(goto_jumps) do
+	for _, __ERDE_TMP_1978__ in ipairs(goto_jumps) do
 		local label, line
-		label = __ERDE_TMP_1936__.label
-		line = __ERDE_TMP_1936__.line
+		label = __ERDE_TMP_1978__.label
+		line = __ERDE_TMP_1978__.line
 		if goto_labels[label] == nil then
 			throw("failed to find goto label '" .. tostring(label) .. "'", line)
 		end
