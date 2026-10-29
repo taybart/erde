@@ -29,6 +29,12 @@ _MODULE.VALID_LUA_TARGETS = {
 for i, target in ipairs(_MODULE.VALID_LUA_TARGETS) do
 	_MODULE.VALID_LUA_TARGETS[target] = true
 end
+_MODULE.EXPERIMENTS = {
+	"match",
+}
+for i, experiment in ipairs(_MODULE.EXPERIMENTS) do
+	_MODULE.EXPERIMENTS[experiment] = true
+end
 _MODULE.KEYWORDS = {
 	["break"] = true,
 	["continue"] = true,

@@ -1,9 +1,10 @@
 local lfs = require("lfs")
 local compile = require("erde.compile")
 local config = require("erde.config")
-local COMPILED_FOOTER_COMMENT, VALID_LUA_TARGETS, VERSION
+local COMPILED_FOOTER_COMMENT, EXPERIMENTS, VALID_LUA_TARGETS, VERSION
 local __ERDE_TMP_8__ = require("erde.constants")
 COMPILED_FOOTER_COMMENT = __ERDE_TMP_8__.COMPILED_FOOTER_COMMENT
+EXPERIMENTS = __ERDE_TMP_8__.EXPERIMENTS
 VALID_LUA_TARGETS = __ERDE_TMP_8__.VALID_LUA_TARGETS
 VERSION = __ERDE_TMP_8__.VERSION
 local lib = require("erde.lib")
@@ -118,6 +119,10 @@ Options:
                           DEPRECATED: Use --bitexpr instead.
    -t, --target <TARGET>  Lua target for version compatability.
                           Must be one of: ]] .. tostring(table.concat(VALID_LUA_TARGETS, ", ")) .. [[
+
+   -X, --experiment <LIST>
+                          Enable experimental extensions (comma separated).
+                          Available: ]] .. tostring(table.concat(EXPERIMENTS, ", ")) .. [[
 
 
 Compile Options:
@@ -387,6 +392,16 @@ while current_arg_index <= num_args do
 		end
 	elseif arg_value == "-o" or arg_value == "--outdir" then
 		cli.outdir = parse_option(arg_value)
+	elseif arg_value == "-X" or arg_value == "--experiment" then
+		for experiment in parse_option(arg_value):gmatch("[^,%s]+") do
+			if not EXPERIMENTS[experiment] then
+				terminate(table.concat({
+					"Unknown experiment: " .. tostring(experiment),
+					"Must be one of: " .. tostring(table.concat(EXPERIMENTS, ", ")),
+				}, "\n"))
+			end
+			config.experiments[experiment] = true
+		end
 	elseif arg_value == "--bitexpr" then
 		config.bitexpr = parse_option(arg_value)
 	elseif arg_value == "-b" or arg_value == "--bitlib" then

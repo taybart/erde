@@ -2,6 +2,7 @@ local _MODULE = {}
 _MODULE.lua_target = "5.1+"
 _MODULE.is_cli_runtime = false
 _MODULE.bitexpr = nil
+_MODULE.experiments = {}
 _MODULE.bitlib = nil
 _MODULE.disable_source_maps = false
 return _MODULE

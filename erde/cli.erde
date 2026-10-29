@@ -1,7 +1,7 @@
 local lfs = require('lfs')
 local compile = require('erde.compile')
 local config = require('erde.config')
-local { COMPILED_FOOTER_COMMENT, VALID_LUA_TARGETS, VERSION } = require('erde.constants')
+local { COMPILED_FOOTER_COMMENT, EXPERIMENTS, VALID_LUA_TARGETS, VERSION } = require('erde.constants')
 local lib = require('erde.lib')
 local { io, string } = require('erde.stdlib')
 local { ensure_path_parents, join_paths } = require('erde.utils')
@@ -136,6 +136,9 @@ Options:
                           DEPRECATED: Use --bitexpr instead.
    -t, --target <TARGET>  Lua target for version compatability.
                           Must be one of: { table.concat(VALID_LUA_TARGETS, ', ') }
+   -X, --experiment <LIST>
+                          Enable experimental extensions (comma separated).
+                          Available: { table.concat(EXPERIMENTS, ', ') }
 
 Compile Options:
    -o, --outdir <DIR>     Output directory for compiled files.
@@ -465,6 +468,17 @@ while current_arg_index <= num_args {
     }
   } elseif arg_value == '-o' || arg_value == '--outdir' {
     cli.outdir = parse_option(arg_value)
+  } elseif arg_value == '-X' || arg_value == '--experiment' {
+    for experiment in parse_option(arg_value):gmatch('[^,%s]+') {
+      if !EXPERIMENTS[experiment] {
+        terminate(table.concat({
+          "Unknown experiment: { experiment }",
+          "Must be one of: { table.concat(EXPERIMENTS, ', ') }",
+        }, '\n'))
+      }
+
+      config.experiments[experiment] = true
+    }
   } elseif arg_value == '--bitexpr' {
     config.bitexpr = parse_option(arg_value)
   } elseif arg_value == '-b' || arg_value == '--bitlib' {

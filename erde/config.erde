@@ -8,6 +8,10 @@ module is_cli_runtime = false
 -- User specified expression to use for bit operations.
 module bitexpr = nil
 
+-- Enabled experimental extensions, as a set of names (ex. `{ match = true }`).
+-- These are all off by default, so the default language stays stable.
+module experiments = {}
+
 -- User specified library to use for bit operations.
 module bitlib = nil
 

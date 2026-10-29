@@ -39,6 +39,8 @@ local goto_jumps, goto_labels
 local alias
 local lua_target
 local bitexpr
+local experiments
+local match_arm_arrow_index
 local function throw(message, line)
 	if line == nil then
 		line = current_token.line
@@ -118,6 +120,14 @@ local function look_past_surround(token_start_index)
 		look_ahead_token = tokens[look_ahead_token_index]
 	until surround_depth == 0
 	return look_ahead_token, look_ahead_token_index
+end
+local function is_arrow(token_index)
+	local token = tokens[token_index]
+	return (
+		token_index ~= match_arm_arrow_index
+		and token.type == TOKEN_TYPES.SYMBOL
+		and (token.value == "->" or token.value == "=>")
+	)
 end
 local function new_tmp_name()
 	tmp_name_counter = tmp_name_counter + 1
@@ -781,10 +791,10 @@ local function function_declaration(scope)
 	}
 	consume()
 	local signature, needs_label_assignment, needs_self_injection
-	local __ERDE_TMP_996__ = function_signature(scope)
-	signature = __ERDE_TMP_996__.signature
-	needs_label_assignment = __ERDE_TMP_996__.needs_label_assignment
-	needs_self_injection = __ERDE_TMP_996__.needs_self_injection
+	local __ERDE_TMP_1008__ = function_signature(scope)
+	signature = __ERDE_TMP_1008__.signature
+	needs_label_assignment = __ERDE_TMP_1008__.needs_label_assignment
+	needs_self_injection = __ERDE_TMP_1008__.needs_self_injection
 	if scope == "local" then
 		table.insert(compile_lines, "local")
 	end
@@ -859,16 +869,10 @@ local function terminal_expression()
 			consume(),
 		}
 	end
-	local next_token = tokens[current_token_index + 1]
-	local is_arrow_function = (
-		next_token.type == TOKEN_TYPES.SYMBOL and (next_token.value == "->" or next_token.value == "=>")
-	)
+	local is_arrow_function = is_arrow(current_token_index + 1)
 	if not is_arrow_function and SURROUND_ENDS[current_token.value] then
-		local past_surround_token = look_past_surround()
-		is_arrow_function = (
-			past_surround_token.type == TOKEN_TYPES.SYMBOL
-			and (past_surround_token.value == "->" or past_surround_token.value == "=>")
-		)
+		local _, past_surround_token_index = look_past_surround()
+		is_arrow_function = is_arrow(past_surround_token_index)
 	end
 	if is_arrow_function then
 		return arrow_function()
@@ -1136,6 +1140,138 @@ local function if_else()
 	table.insert(compile_lines, "end")
 	return compile_lines
 end
+local function is_match_statement()
+	if not experiments.match or current_token.type ~= TOKEN_TYPES.WORD or current_token.value ~= "match" then
+		return false
+	end
+	local next_token = tokens[current_token_index + 1]
+	if next_token.type ~= TOKEN_TYPES.SYMBOL then
+		return true
+	elseif
+		next_token.value == "="
+		or next_token.value == ","
+		or next_token.value == "."
+		or next_token.value == "["
+		or next_token.value == ":"
+	then
+		return false
+	elseif next_token.value == "(" then
+		local past_surround_token = look_past_surround(current_token_index + 1)
+		return past_surround_token.type == TOKEN_TYPES.SYMBOL and past_surround_token.value == "{"
+	end
+	return not BINOP_ASSIGNMENT_TOKENS[next_token.value] or tokens[current_token_index + 2].value ~= "="
+end
+local function find_match_arm_arrow()
+	local token_index = current_token_index
+	while true do
+		local token = tokens[token_index]
+		if token.type == TOKEN_TYPES.EOF then
+			return nil
+		elseif token.type ~= TOKEN_TYPES.SYMBOL then
+			token_index = token_index + 1
+		elseif token.value == "=>" then
+			return token_index
+		elseif token.value == "{" or token.value == "}" then
+			return nil
+		elseif SURROUND_ENDS[token.value] then
+			local _, past_surround_token_index = look_past_surround(token_index)
+			token_index = past_surround_token_index
+		else
+			token_index = token_index + 1
+		end
+	end
+end
+local function match_arm_condition(subject_name)
+	local old_match_arm_arrow_index = match_arm_arrow_index
+	match_arm_arrow_index = find_match_arm_arrow()
+	local condition_line, condition = current_token.line
+	if current_token.type == TOKEN_TYPES.WORD and current_token.value == "_" then
+		consume()
+	else
+		local patterns = {}
+		repeat
+			table.insert(patterns, {
+				subject_name,
+				"==",
+				"(",
+				expression(BINOPS["|"].prec + 1),
+				")",
+			})
+		until not branch("|")
+		condition = {
+			"(",
+			weave(patterns, "or"),
+			")",
+		}
+	end
+	if branch("if") then
+		local guard = {
+			"(",
+			expression(),
+			")",
+		}
+		condition = condition and {
+			condition,
+			"and",
+			guard,
+		} or guard
+	end
+	match_arm_arrow_index = old_match_arm_arrow_index
+	expect("=>", true)
+	return condition_line, condition
+end
+local function match_statement()
+	consume()
+	local subject_name = new_tmp_name()
+	local compile_lines = {
+		"do",
+		"local " .. tostring(subject_name) .. " =",
+		expression(),
+	}
+	local arm_compile_lines = {}
+	local fallback_compile_lines
+	expect("{", true)
+	while current_token.value ~= "}" do
+		if current_token.type == TOKEN_TYPES.EOF then
+			throw("unexpected eof, missing '}'")
+		elseif fallback_compile_lines then
+			throw("unreachable match arm (after '_')")
+		end
+		local condition_line, condition = match_arm_condition(subject_name)
+		local body = surround("{", "}", block)
+		branch(",")
+		if condition then
+			table.insert(arm_compile_lines, {
+				#arm_compile_lines == 0 and "if" or "elseif",
+				condition_line,
+				condition,
+				"then",
+				body,
+			})
+		else
+			fallback_compile_lines = body
+		end
+	end
+	expect("}", true)
+	if #arm_compile_lines > 0 then
+		table.insert(compile_lines, arm_compile_lines)
+		if fallback_compile_lines then
+			table.insert(compile_lines, {
+				"else",
+				fallback_compile_lines,
+			})
+		end
+		table.insert(compile_lines, "end")
+	elseif fallback_compile_lines then
+		table.insert(compile_lines, {
+			"do",
+			fallback_compile_lines,
+			"end",
+		})
+	end
+	table.insert(compile_lines, "end")
+	return compile_lines
+end
 local function assignment_index_chain()
 	if current_token.value == "(" then
 		return index_chain({
@@ -1313,6 +1449,8 @@ function statement()
 		table.insert(compile_lines, do_block())
 	elseif current_token.value == "if" then
 		table.insert(compile_lines, if_else())
+	elseif is_match_statement() then
+		table.insert(compile_lines, match_statement())
 	elseif current_token.value == "for" then
 		table.insert(compile_lines, for_loop())
 	elseif current_token.value == "while" then
@@ -1408,6 +1546,8 @@ return function(source, options)
 	goto_labels = {}
 	alias = options.alias or get_source_alias(source)
 	lua_target = options.lua_target or config.lua_target
+	experiments = options.experiments or config.experiments
+	match_arm_arrow_index = nil
 	if options.bitlib then
 		print("WARNING: `bitlib` has been deprecated in favor of `bitexpr`.")
 	end
@@ -1425,10 +1565,10 @@ return function(source, options)
 		source_map = source_map,
 		source_line = current_token.line,
 	})
-	for _, __ERDE_TMP_1978__ in ipairs(goto_jumps) do
+	for _, __ERDE_TMP_2145__ in ipairs(goto_jumps) do
 		local label, line
-		label = __ERDE_TMP_1978__.label
-		line = __ERDE_TMP_1978__.line
+		label = __ERDE_TMP_2145__.label
+		line = __ERDE_TMP_2145__.line
 		if goto_labels[label] == nil then
 			throw("failed to find goto label '" .. tostring(label) .. "'", line)
 		end

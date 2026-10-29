@@ -146,6 +146,7 @@ module function __erde_internal_load_source__(source, options = {}) {
     alias = options.alias,
     lua_target = options.lua_target,
     bitlib = options.bitlib,
+    experiments = options.experiments,
   })
 
   -- Remove the shebang! Lua's `load` function cannot handle shebangs.
@@ -227,6 +228,10 @@ module function load(arg1, arg2) {
 
   config.bitlib = options.bitlib
   config.disable_source_maps = options.disable_source_maps
+
+  if options.experiments != nil {
+    config.experiments = options.experiments
+  }
 
   -- Always set `debug.traceback`, in case this is called multiple times
   -- with different arguments. By default we override Lua's native traceback

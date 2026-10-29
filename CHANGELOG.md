@@ -9,6 +9,8 @@ based on [rockspec versioning](https://github.com/luarocks/luarocks/wiki/Rockspe
 
 ### Added
 - Lua 5.5 support (`5.5` and `5.5+` targets)
+- Experimental `match` statements, opt-in via `-X match` (cli) or `experiments = { match = true }` (api)
+    - ex) `match x { 1 | 2 => { ... } _ if y => { ... } _ => { ... } }`
 
 ### Fixed
 - Reassigning loop variables no longer generates invalid Lua for Lua 5.5, where loop variables are read-only

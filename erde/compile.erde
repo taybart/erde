@@ -80,6 +80,13 @@ local lua_target
 -- Resolved bit expression to use for compiling bit operations.
 local bitexpr
 
+-- Enabled experimental extensions (see `config.experiments`).
+local experiments
+
+-- Token index of the current match arm's `=>`, which ends the arm's patterns
+-- instead of starting an arrow function (nil outside of match patterns).
+local match_arm_arrow_index
+
 -- -----------------------------------------------------------------------------
 -- General Helpers
 -- -----------------------------------------------------------------------------
@@ -177,6 +184,15 @@ local function look_past_surround(token_start_index = current_token_index) {
   } until surround_depth == 0
 
   return look_ahead_token, look_ahead_token_index
+}
+
+local function is_arrow(token_index) {
+  local token = tokens[token_index]
+  return (
+    token_index != match_arm_arrow_index &&
+    token.type == TOKEN_TYPES.SYMBOL &&
+    (token.value == '->' || token.value == '=>')
+  )
 }
 
 -- -----------------------------------------------------------------------------
@@ -1065,21 +1081,14 @@ local function terminal_expression() {
     return { current_token.line, consume() }
   }
 
-  local next_token = tokens[current_token_index + 1]
-  local is_arrow_function = (
-    next_token.type == TOKEN_TYPES.SYMBOL &&
-    (next_token.value == '->' || next_token.value == '=>')
-  )
+  local is_arrow_function = is_arrow(current_token_index + 1)
 
   -- First do a quick check for is_arrow_function (in case of implicit params),
   -- otherwise if surround_end is truthy (possible params), need to check the
   -- next token after. This is _much_ faster than backtracking.
   if !is_arrow_function && SURROUND_ENDS[current_token.value] {
-    local past_surround_token = look_past_surround()
-    is_arrow_function = (
-      past_surround_token.type == TOKEN_TYPES.SYMBOL &&
-      (past_surround_token.value == '->' || past_surround_token.value == '=>')
-    )
+    local _, past_surround_token_index = look_past_surround()
+    is_arrow_function = is_arrow(past_surround_token_index)
   }
 
   if is_arrow_function {
@@ -1406,6 +1415,152 @@ local function if_else() {
 }
 
 -- -----------------------------------------------------------------------------
+-- Match (experimental)
+-- -----------------------------------------------------------------------------
+
+-- Checks for a match statement. `match` is a contextual keyword: it is an
+-- ordinary name everywhere else (ex. `s:match(p)`), and at the start of a
+-- statement when followed by anything that continues a name (ex. `match = 1`,
+-- `match.x = 1`, `match(x)`).
+local function is_match_statement() {
+  if !experiments.match || current_token.type != TOKEN_TYPES.WORD || current_token.value != 'match' {
+    return false
+  }
+
+  local next_token = tokens[current_token_index + 1]
+
+  if next_token.type != TOKEN_TYPES.SYMBOL {
+    return true
+  } elseif next_token.value == '=' || next_token.value == ',' || next_token.value == '.' || next_token.value == '[' || next_token.value == ':' {
+    return false
+  } elseif next_token.value == '(' {
+    -- `match(x)` is a call, `match (x) {` is a match statement.
+    local past_surround_token = look_past_surround(current_token_index + 1)
+    return past_surround_token.type == TOKEN_TYPES.SYMBOL && past_surround_token.value == '{'
+  }
+
+  -- `match += 1` (but `match -x {` is a match statement)
+  return !BINOP_ASSIGNMENT_TOKENS[next_token.value] || tokens[current_token_index + 2].value != '='
+}
+
+-- Finds the `=>` ending the current match arm's patterns (outside of any
+-- surrounds), or nil if there is none.
+local function find_match_arm_arrow() {
+  local token_index = current_token_index
+
+  while true {
+    local token = tokens[token_index]
+
+    if token.type == TOKEN_TYPES.EOF {
+      return nil
+    } elseif token.type != TOKEN_TYPES.SYMBOL {
+      token_index += 1
+    } elseif token.value == '=>' {
+      return token_index
+    } elseif token.value == '{' || token.value == '}' {
+      return nil -- arm body (or end of match), so the arrow is missing
+    } elseif SURROUND_ENDS[token.value] {
+      local _, past_surround_token_index = look_past_surround(token_index)
+      token_index = past_surround_token_index
+    } else {
+      token_index += 1
+    }
+  }
+}
+
+-- Parses `pattern {'|' pattern} ['if' guard] '=>'`, returning nil for a catch
+-- all arm (`_ =>`).
+local function match_arm_condition(subject_name) {
+  local old_match_arm_arrow_index = match_arm_arrow_index
+  match_arm_arrow_index = find_match_arm_arrow()
+
+  local condition_line, condition = current_token.line
+
+  if current_token.type == TOKEN_TYPES.WORD && current_token.value == '_' {
+    consume()
+  } else {
+    local patterns = {}
+
+    repeat {
+      -- Patterns stop before `|` (bitwise or), so `|` separates them.
+      table.insert(patterns, { subject_name, '==', '(', expression(BINOPS['|'].prec + 1), ')' })
+    } until !branch('|')
+
+    condition = { '(', weave(patterns, 'or'), ')' }
+  }
+
+  if branch('if') {
+    local guard = { '(', expression(), ')' }
+    condition = condition && { condition, 'and', guard } || guard
+  }
+
+  match_arm_arrow_index = old_match_arm_arrow_index
+  expect('=>', true)
+
+  return condition_line, condition
+}
+
+-- Compiles a match statement into an if chain:
+--
+--   do
+--     local subject = <subject>
+--     if subject == a or subject == b then ... elseif ... else ... end
+--   end
+local function match_statement() {
+  consume() -- 'match'
+
+  local subject_name = new_tmp_name()
+  local compile_lines = { 'do', "local { subject_name } =", expression() }
+
+  local arm_compile_lines = {}
+  local fallback_compile_lines
+
+  expect('{', true)
+
+  while current_token.value != '}' {
+    if current_token.type == TOKEN_TYPES.EOF {
+      throw("unexpected eof, missing '}'")
+    } elseif fallback_compile_lines {
+      throw("unreachable match arm (after '_')")
+    }
+
+    local condition_line, condition = match_arm_condition(subject_name)
+    local body = surround('{', '}', block)
+    branch(',')
+
+    if condition {
+      table.insert(arm_compile_lines, {
+        #arm_compile_lines == 0 && 'if' || 'elseif',
+        condition_line,
+        condition,
+        'then',
+        body,
+      })
+    } else {
+      fallback_compile_lines = body
+    }
+  }
+
+  expect('}', true)
+
+  if #arm_compile_lines > 0 {
+    table.insert(compile_lines, arm_compile_lines)
+
+    if fallback_compile_lines {
+      table.insert(compile_lines, { 'else', fallback_compile_lines })
+    }
+
+    table.insert(compile_lines, 'end')
+  } elseif fallback_compile_lines {
+    table.insert(compile_lines, { 'do', fallback_compile_lines, 'end' })
+  }
+
+  table.insert(compile_lines, 'end')
+
+  return compile_lines
+}
+
+-- -----------------------------------------------------------------------------
 -- Assignments
 -- -----------------------------------------------------------------------------
 
@@ -1622,6 +1777,8 @@ function statement() {
     table.insert(compile_lines, do_block())
   } elseif current_token.value == 'if' {
     table.insert(compile_lines, if_else())
+  } elseif is_match_statement() {
+    table.insert(compile_lines, match_statement())
   } elseif current_token.value == 'for' {
     table.insert(compile_lines, for_loop())
   } elseif current_token.value == 'while' {
@@ -1744,6 +1901,8 @@ return (source, options = {}) -> {
   goto_labels = {}
   alias = options.alias || get_source_alias(source)
   lua_target = options.lua_target || config.lua_target
+  experiments = options.experiments || config.experiments
+  match_arm_arrow_index = nil
 
   if options.bitlib {
     print("WARNING: `bitlib` has been deprecated in favor of `bitexpr`.")

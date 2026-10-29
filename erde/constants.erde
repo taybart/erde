@@ -53,6 +53,14 @@ for i, target in ipairs(VALID_LUA_TARGETS) {
 -- Keywords / Terminals
 -- -----------------------------------------------------------------------------
 
+module EXPERIMENTS = {
+	'match',
+}
+
+for i, experiment in ipairs(EXPERIMENTS) {
+	EXPERIMENTS[experiment] = true
+}
+
 module KEYWORDS = {
 	['break'] = true,
 	['continue'] = true,

@@ -84,6 +84,7 @@ function _MODULE.__erde_internal_load_source__(source, options)
 		alias = options.alias,
 		lua_target = options.lua_target,
 		bitlib = options.bitlib,
+		experiments = options.experiments,
 	})
 	compiled = compiled:gsub("^#![^\n]+", "")
 	local loader, load_error = loadlua(compiled, chunkname)
@@ -145,6 +146,9 @@ function _MODULE.load(arg1, arg2)
 	end
 	config.bitlib = options.bitlib
 	config.disable_source_maps = options.disable_source_maps
+	if options.experiments ~= nil then
+		config.experiments = options.experiments
+	end
 	debug.traceback = options.keep_traceback == true and native_traceback or _MODULE.traceback
 	if new_lua_target ~= nil then
 		if VALID_LUA_TARGETS[new_lua_target] then
